@@ -1,5 +1,14 @@
+# Create ModelSim work library.
 vlib work
-vlog cordic_rotation.v cordic_vectoring.v tb_cordic_q1.v
+
+# Compile Q1 rotation/vectoring files.
+vlog rtl/cordic_rotation.v rtl/cordic_vectoring.v rtl/tb_cordic_q1.v
+
+# Run Q1 testbench in command line mode.
 vsim -c tb_cordic_q1 -do "run -all; quit"
-vlog cordic_pipeline.v tb_cordic_pipeline.v
+
+# Compile Q2 pipeline divider files.
+vlog rtl/cordic_pipeline.v rtl/tb_cordic_pipeline.v
+
+# Run Q2 testbench in command line mode.
 vsim -c tb_cordic_pipeline -do "run -all; quit"

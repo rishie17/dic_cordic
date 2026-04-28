@@ -1,86 +1,91 @@
 `timescale 1ns/1ps
 
+// Testbench for pipelined CORDIC divider.
 module tb_cordic_pipeline;
-    parameter N = 32;
-    parameter FRAC = 28;
+    parameter N = 32;              // data width used by DUT
+    parameter FRAC = 28;           // fractional bit count used by DUT
 
-    reg clk, rst, valid_in;
-    reg signed [N-1:0] numerator, denominator;
-    wire valid_out;
-    wire signed [N-1:0] quotient;
+    reg clk;                       // testbench clock
+    reg rst;                       // reset signal
+    reg valid_in;                  // marks input as valid
+    reg signed [N-1:0] num;        // numerator input
+    reg signed [N-1:0] den;        // denominator input
+    wire valid_out;                // output valid signal
+    wire signed [N-1:0] quo;       // quotient output
 
-    integer fd;
-    integer cycle;
+    integer fp;                    // CSV file handle
+    integer cycle;                 // simple cycle counter
 
-    cordic_pipeline #(.N(N), .FRAC(FRAC), .ITER(16)) dut (
-        .clk(clk),
-        .rst(rst),
-        .valid_in(valid_in),
-        .numerator_in(numerator),
-        .denominator_in(denominator),
-        .valid_out(valid_out),
-        .quotient_out(quotient)
+    cordic_pipeline div1 (         // instantiate divider DUT
+        .clk(clk),                 // connect clock
+        .rst(rst),                 // connect reset
+        .valid_in(valid_in),       // connect input valid
+        .numerator_in(num),        // connect numerator
+        .denominator_in(den),      // connect denominator
+        .valid_out(valid_out),     // connect output valid
+        .quotient_out(quo)         // connect quotient
     );
 
-    always #5 clk = ~clk;
+    always #5 clk = ~clk;          // make a 10 ns clock
 
-    function signed [N-1:0] to_fixed;
-        input real value;
+    // Convert real number to fixed-point integer.
+    function signed [N-1:0] fx;
+        input real a;              // real input value
         begin
-            to_fixed = $rtoi(value * (1 << FRAC));
+            fx = $rtoi(a * (1 << FRAC)); // scale real value by 2^FRAC
         end
     endfunction
 
-    task send_case;
-        input real n_real;
-        input real d_real;
+    // Send one division sample into the pipeline.
+    task give_input;
+        input real n;              // numerator as real
+        input real d;              // denominator as real
         begin
-            @(negedge clk);
-            numerator = to_fixed(n_real);
-            denominator = to_fixed(d_real);
-            valid_in = 1'b1;
-            @(posedge clk);
-            $fdisplay(fd, "IN,%0d,%f,%f,0", cycle, n_real, d_real);
+            @(negedge clk);        // change inputs away from active edge
+            num = fx(n);           // drive fixed-point numerator
+            den = fx(d);           // drive fixed-point denominator
+            valid_in = 1'b1;       // mark this input as valid
+            $fdisplay(fp, "IN,%0d,%f,%f,0", cycle, n, d); // save input row
         end
     endtask
 
     initial begin
-        clk = 0;
-        rst = 1;
-        valid_in = 0;
-        numerator = 0;
-        denominator = 0;
-        cycle = 0;
+        clk = 0;                   // start clock low
+        rst = 1;                   // start in reset
+        valid_in = 0;              // no valid input during reset
+        num = 0;                   // clear numerator
+        den = 0;                   // clear denominator
+        cycle = 0;                 // clear cycle counter
 
-        fd = $fopen("pipeline_results.csv", "w");
-        $fdisplay(fd, "type,cycle,numerator,denominator,quotient_int");
+        fp = $fopen("results/pipeline_results.csv", "w"); // open CSV file
+        $fdisplay(fp, "type,cycle,numerator,denominator,quotient_int"); // header
 
-        repeat (3) @(posedge clk);
-        rst = 0;
+        repeat (3) @(posedge clk); // hold reset for a few clocks
+        rst = 0;                   // release reset
 
-        send_case(0.50, 1.00);
-        send_case(0.75, 1.25);
-        send_case(1.00, 1.50);
-        send_case(-0.60, 1.20);
-        send_case(1.40, 1.00);
-        send_case(0.20, 0.80);
+        give_input(0.50, 1.00);    // expected result about 0.5
+        give_input(0.75, 1.25);    // expected result about 0.6
+        give_input(1.00, 1.50);    // expected result about 0.6667
+        give_input(-0.60, 1.20);   // expected result about -0.5
+        give_input(1.40, 1.00);    // expected result about 1.4
+        give_input(0.20, 0.80);    // expected result about 0.25
 
-        @(negedge clk);
-        valid_in = 0;
-        numerator = 0;
-        denominator = to_fixed(1.0);
+        @(negedge clk);            // wait before turning off valid
+        valid_in = 0;              // stop sending new inputs
+        num = 0;                   // clear numerator
+        den = fx(1.0);             // keep denominator nonzero
 
-        repeat (45) @(posedge clk);
-        $fclose(fd);
-        $display("Q2 pipeline testbench done. CSV file written.");
-        $finish;
+        repeat (30) @(posedge clk);// wait for all outputs
+        $fclose(fp);               // close CSV file
+        $display("pipeline tests finished"); // print completion message
+        $finish;                   // stop simulation
     end
 
     always @(posedge clk) begin
-        cycle <= cycle + 1;
-        if (valid_out) begin
-            $display("cycle=%0d quotient_int=%0d", cycle, quotient);
-            $fdisplay(fd, "OUT,%0d,0,0,%0d", cycle, quotient);
+        cycle <= cycle + 1;        // count clock cycles
+        if (valid_out) begin       // save only valid outputs
+            $display("cycle=%0d quotient_int=%0d", cycle, quo); // print result
+            $fdisplay(fp, "OUT,%0d,0,0,%0d", cycle, quo);       // save output row
         end
     end
 endmodule

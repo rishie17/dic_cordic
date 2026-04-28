@@ -1,88 +1,90 @@
-`timescale 1ns/1ps // simulation time unit is 1ns and precision is 1ps
+`timescale 1ns/1ps
 
-// 16 iteration circular CORDIC in rotation mode.
-// Default format is Q3.28 when N=32 and FRAC=28.
+// Rotation mode CORDIC block.
+// Uses Q3.28 fixed point when N=32 and FRAC=28.
 module cordic_rotation #(
-    parameter N = 32, // total bit width for inputs and outputs
-    parameter FRAC = 28, // fractional bit count for fixed-point arithmetic
-    parameter ITER = 16 // number of CORDIC iterations
+    parameter N = 32,              // total input/output width
+    parameter FRAC = 28,           // number of fractional bits
+    parameter ITER = 16            // number of CORDIC steps
 )(
-    input  signed [N-1:0] x_in, // signed fixed-point x input
-    input  signed [N-1:0] y_in, // signed fixed-point y input
-    input  signed [N-1:0] angle_in, // signed fixed-point rotation angle input
-    output signed [N-1:0] x_out, // signed fixed-point rotated x output
-    output signed [N-1:0] y_out, // signed fixed-point rotated y output
-    output signed [N-1:0] angle_left // remaining angle after rotation
+    input  signed [N-1:0] x_in,    // input x value
+    input  signed [N-1:0] y_in,    // input y value
+    input  signed [N-1:0] angle_in,// input angle in radians, fixed point
+    output signed [N-1:0] x_out,   // rotated x value
+    output signed [N-1:0] y_out,   // rotated y value
+    output signed [N-1:0] angle_left // remaining angle after iterations
 );
 
-    localparam W = N + 4; // working width with guard bits for shift/add safety
+    localparam W = N + 3;          // internal width with a few guard bits
 
-    integer i; // loop index for iteration
-    reg signed [W-1:0] x_work, y_work, z_work; // current working values for x, y, and z
-    reg signed [W-1:0] x_next, y_next, z_next; // next values computed each iteration
+    integer i;                     // loop variable for the CORDIC iterations
+    reg signed [W-1:0] x_reg;      // working x value
+    reg signed [W-1:0] y_reg;      // working y value
+    reg signed [W-1:0] z_reg;      // working angle value
+    reg signed [W-1:0] x_old;      // saved x before updating
+    reg signed [W-1:0] y_old;      // saved y before updating
 
-    // K = 0.607252935 approx using only shifts:
-    // 1/2 + 1/8 - 1/64 - 1/512 - 1/4096 + 1/16384 + 1/32768
-    function signed [W-1:0] scale_by_k;
-        input signed [W-1:0] value; // input to scale by the CORDIC gain correction
+    // Lookup table for atan(2^-i), scaled by 2^28.
+    function signed [W-1:0] atan_val;
+        input integer k;           // table index
         begin
-            scale_by_k = (value >>> 1) + (value >>> 3)
-                       - (value >>> 6) - (value >>> 9)
-                       - (value >>> 12) + (value >>> 14)
-                       + (value >>> 15); // approximate K using bit shifts and adds
-        end
-    endfunction
-
-    function signed [W-1:0] atan_lut;
-        input integer index; // iteration index for atan lookup
-        begin
-            case (index)
-                0:  atan_lut = 210828714; // atan(2^-0) scaled to Q3.28
-                1:  atan_lut = 124459457; // atan(2^-1)
-                2:  atan_lut = 65760959; // atan(2^-2)
-                3:  atan_lut = 33381290; // atan(2^-3)
-                4:  atan_lut = 16755422; // atan(2^-4)
-                5:  atan_lut = 8385879; // atan(2^-5)
-                6:  atan_lut = 4193963; // atan(2^-6)
-                7:  atan_lut = 2097109; // atan(2^-7)
-                8:  atan_lut = 1048571; // atan(2^-8)
-                9:  atan_lut = 524287; // atan(2^-9)
-                10: atan_lut = 262144; // atan(2^-10)
-                11: atan_lut = 131072; // atan(2^-11)
-                12: atan_lut = 65536; // atan(2^-12)
-                13: atan_lut = 32768; // atan(2^-13)
-                14: atan_lut = 16384; // atan(2^-14)
-                15: atan_lut = 8192; // atan(2^-15)
-                default: atan_lut = 0; // default fallback if index is out of range
+            case (k)
+                0:  atan_val = 210828714; // atan(1)
+                1:  atan_val = 124459457; // atan(1/2)
+                2:  atan_val = 65760959;  // atan(1/4)
+                3:  atan_val = 33381290;  // atan(1/8)
+                4:  atan_val = 16755422;  // atan(1/16)
+                5:  atan_val = 8385879;   // atan(1/32)
+                6:  atan_val = 4193963;   // atan(1/64)
+                7:  atan_val = 2097109;   // atan(1/128)
+                8:  atan_val = 1048571;   // atan(1/256)
+                9:  atan_val = 524287;    // atan(1/512)
+                10: atan_val = 262144;    // atan(1/1024)
+                11: atan_val = 131072;    // atan(1/2048)
+                12: atan_val = 65536;     // atan(1/4096)
+                13: atan_val = 32768;     // atan(1/8192)
+                14: atan_val = 16384;     // atan(1/16384)
+                15: atan_val = 8192;      // atan(1/32768)
+                default: atan_val = 0;    // safe value for unused indexes
             endcase
         end
     endfunction
 
+    // Approximate K=0.60725 using shifts, so no multiplier is used.
+    function signed [W-1:0] gain_fix;
+        input signed [W-1:0] a;    // value to scale by K
+        begin
+            gain_fix = (a >>> 1) + (a >>> 3)   // 1/2 + 1/8
+                     - (a >>> 6) - (a >>> 9)   // subtract small correction terms
+                     - (a >>> 12) + (a >>> 14) // add another small correction
+                     + (a >>> 15);             // final small correction
+        end
+    endfunction
+
+    // Combinational 16-step CORDIC rotation.
     always @(*) begin
-        // Rotation mode gets K correction before the rotations.
-        x_work = scale_by_k({{4{x_in[N-1]}}, x_in}); // sign-extend x and apply gain correction
-        y_work = scale_by_k({{4{y_in[N-1]}}, y_in}); // sign-extend y and apply gain correction
-        z_work = {{4{angle_in[N-1]}}, angle_in}; // sign-extend angle into working width
+        x_reg = gain_fix({{3{x_in[N-1]}}, x_in}); // sign extend x and pre-scale by K
+        y_reg = gain_fix({{3{y_in[N-1]}}, y_in}); // sign extend y and pre-scale by K
+        z_reg = {{3{angle_in[N-1]}}, angle_in};   // sign extend the angle
 
-        for (i = 0; i < ITER; i = i + 1) begin
-            if (z_work >= 0) begin
-                x_next = x_work - (y_work >>> i); // rotate negatively when z is non-negative
-                y_next = y_work + (x_work >>> i); // update y with shifted x
-                z_next = z_work - atan_lut(i); // subtract current atan term from z
-            end else begin
-                x_next = x_work + (y_work >>> i); // rotate positively when z is negative
-                y_next = y_work - (x_work >>> i); // update y with shifted x
-                z_next = z_work + atan_lut(i); // add current atan term to z
+        for (i = 0; i < ITER; i = i + 1) begin    // run each CORDIC iteration
+            x_old = x_reg;                        // save x before changing it
+            y_old = y_reg;                        // save y before changing it
+
+            if (z_reg >= 0) begin                 // rotate one way when angle is positive
+                x_reg = x_old - (y_old >>> i);    // x update uses shifted y
+                y_reg = y_old + (x_old >>> i);    // y update uses shifted x
+                z_reg = z_reg - atan_val(i);      // reduce the remaining angle
+            end else begin                        // rotate opposite way when angle is negative
+                x_reg = x_old + (y_old >>> i);    // x update for opposite direction
+                y_reg = y_old - (x_old >>> i);    // y update for opposite direction
+                z_reg = z_reg + atan_val(i);      // bring angle back toward zero
             end
-
-            x_work = x_next; // accept updated x for next iteration
-            y_work = y_next; // accept updated y for next iteration
-            z_work = z_next; // accept updated z for next iteration
         end
     end
 
-    assign x_out = x_work[N-1:0]; // output the lower N bits of final x
-    assign y_out = y_work[N-1:0]; // output the lower N bits of final y
-    assign angle_left = z_work[N-1:0]; // output the lower N bits of final remaining angle
+    assign x_out = x_reg[N-1:0];                  // send final x to output
+    assign y_out = y_reg[N-1:0];                  // send final y to output
+    assign angle_left = z_reg[N-1:0];             // send leftover angle to output
 
 endmodule

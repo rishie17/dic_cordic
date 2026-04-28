@@ -45,8 +45,8 @@ This keeps the hardware multiplier-free.
 
 The Q1 design files are:
 
-- [cordic_rotation.v](./cordic_rotation.v)
-- [cordic_vectoring.v](./cordic_vectoring.v)
+- [rtl/cordic_rotation.v](./rtl/cordic_rotation.v)
+- [rtl/cordic_vectoring.v](./rtl/cordic_vectoring.v)
 
 Rotation mode rotates an input vector by a given angle:
 
@@ -94,28 +94,28 @@ For this student-level version, vectoring is tested for `x >= 0`, so it gives th
 
 The Q1 testbench is:
 
-- [tb_cordic_q1.v](./tb_cordic_q1.v)
+- [rtl/tb_cordic_q1.v](./rtl/tb_cordic_q1.v)
 
 It tests both modules and writes:
 
-- `rotation_results.csv`
-- `vectoring_results.csv`
+- `results/rotation_results.csv`
+- `results/vectoring_results.csv`
 
 ModelSim-style commands are in:
 
-- [modelsim_commands.do](./modelsim_commands.do)
+- [rtl/modelsim_commands.do](./rtl/modelsim_commands.do)
 
 Run:
 
 ```tcl
-do modelsim_commands.do
+do rtl/modelsim_commands.do
 ```
 
 Or with Icarus Verilog:
 
 ```bash
-iverilog -o q1_sim.vvp cordic_rotation.v cordic_vectoring.v tb_cordic_q1.v
-vvp q1_sim.vvp
+iverilog -o results/q1_check.vvp rtl/cordic_rotation.v rtl/cordic_vectoring.v rtl/tb_cordic_q1.v
+vvp results/q1_check.vvp
 ```
 
 Sample Q1 simulation output:
@@ -132,7 +132,7 @@ Q1 testbench done. CSV files written.
 
 The Python checker is:
 
-- [verify_q1.py](./verify_q1.py)
+- [verify/verify_q1.py](./verify/verify_q1.py)
 
 It implements the same fixed-point CORDIC algorithm as the Verilog. It reads the CSV files from simulation and compares:
 
@@ -144,7 +144,7 @@ It implements the same fixed-point CORDIC algorithm as the Verilog. It reads the
 Run:
 
 ```bash
-python verify_q1.py
+python verify/verify_q1.py
 ```
 
 Sample output:
@@ -169,8 +169,8 @@ For Q2 I chose division using linear CORDIC.
 
 Files:
 
-- [cordic_pipeline.v](./cordic_pipeline.v)
-- [tb_cordic_pipeline.v](./tb_cordic_pipeline.v)
+- [rtl/cordic_pipeline.v](./rtl/cordic_pipeline.v)
+- [rtl/tb_cordic_pipeline.v](./rtl/tb_cordic_pipeline.v)
 
 The operation is:
 
@@ -204,21 +204,18 @@ Here:
 - `y` starts as the numerator
 - `z` becomes the quotient
 
-### Double Pipeline Structure
+### Pipeline Structure
 
-Each of the 16 stages is split into two registered halves:
+The simplified version uses one register per CORDIC iteration. That makes the pipeline easier to draw and explain:
 
 ```text
-Half A: register x, y, z, decide direction, calculate shifted x
-Half B: update y and z using add/subtract
+pipe[0] -> iteration 0 -> pipe[1] -> iteration 1 -> ... -> pipe[16]
 ```
-
-So one CORDIC iteration is not done in one long combinational block. It is broken into two shorter steps.
 
 The total latency is:
 
 ```text
-16 stages * 2 registers per stage = 32 clock cycles
+16 CORDIC stages = about 16 clock cycles
 ```
 
 Throughput is:
@@ -230,11 +227,11 @@ Throughput is:
 Conceptually:
 
 ```text
-cycle 0: input sample 0 enters stage 0 half A
-cycle 1: sample 0 enters stage 0 half B, sample 1 enters stage 0 half A
-cycle 2: sample 0 enters stage 1 half A, sample 1 enters stage 0 half B
+cycle 0: input sample 0 enters pipe[0]
+cycle 1: sample 0 moves to pipe[1], sample 1 enters pipe[0]
+cycle 2: sample 0 moves to pipe[2], sample 1 moves to pipe[1]
 ...
-cycle 32 onward: outputs come every clock
+after the pipe fills: outputs come every clock
 ```
 
 This is useful in real-time systems because the clock period can be shorter. The answer comes later, but once the pipe is full it keeps producing answers continuously.
@@ -243,24 +240,24 @@ This is useful in real-time systems because the clock period can be shorter. The
 
 The Q2 Python checker is:
 
-- [verify_pipeline.py](./verify_pipeline.py)
+- [verify/verify_pipeline.py](./verify/verify_pipeline.py)
 
 Run:
 
 ```bash
-python verify_pipeline.py
+python verify/verify_pipeline.py
 ```
 
 It reads:
 
-- `pipeline_results.csv`
+- `results/pipeline_results.csv`
 
 Then compares the Verilog quotient with the Python fixed-point CORDIC quotient.
 
 Sample output:
 
 ```text
-Doubly pipelined division check
+Pipelined division check
 case | numerator denominator | verilog_q python_q math_q abs_err rel_err
    0 |  0.5000  1.0000 |  0.50003052  0.50003052  0.50000000 0.000e+00 0.000e+00
    1 |  0.7500  1.2500 |  0.60000610  0.60000610  0.60000000 0.000e+00 0.000e+00
@@ -303,4 +300,27 @@ CORDIC is nice for FPGA/digital design because it replaces expensive multipliers
 
 The scaling factor is important. If we ignore it, the answer has a gain error of about `1.6467`. In this design I handled it using a shift-add approximation of `K`, so the datapath still stays multiplier-free.
 
-The doubly pipelined divider has more registers and more latency, but it can run faster because each stage has less combinational delay. In a real-time system, that trade is usually fine because throughput matters more than the first result latency.
+The pipelined divider has more registers than a fully combinational divider, but it can accept a new input every clock. In a real-time system, that is usually useful because throughput matters more than the first result latency.
+
+## HOW THIS CODE WORKS (STUDENT EXPLANATION)
+
+The code is written in a simple way on purpose. The rotation and vectoring modules both use a `for` loop for 16 CORDIC iterations. The variables `x_reg`, `y_reg`, and `z_reg` are the main values being updated.
+
+In one rotation iteration, first I save old `x` and `y` into `x_old` and `y_old`. This is needed because both new values use the old values. Then the sign of `z_reg` decides the direction:
+
+```text
+if z is positive:
+    x = x - (y >> i)
+    y = y + (x >> i)
+    z = z - atan_table[i]
+else:
+    x = x + (y >> i)
+    y = y - (x >> i)
+    z = z + atan_table[i]
+```
+
+The shift `>> i` is the main CORDIC trick. Shifting right by 1 divides by 2, shifting right by 2 divides by 4, and so on. So the circuit avoids multipliers and uses only shifts and add/subtract logic.
+
+Rotation mode and vectoring mode are very similar. Rotation mode checks the angle `z_reg`, because we are trying to use up the required angle. Vectoring mode checks `y_reg`, because we are trying to rotate the vector until the y value becomes almost zero.
+
+The pipeline divider is also kept simple. It has arrays like `x_pipe[0]` to `x_pipe[16]`. Each clock, data moves one stage forward. Every stage does one CORDIC division step and updates `y` and `z`. The `z` value slowly becomes the quotient. The output is delayed by 16 clocks, but once the pipeline is full, it can give one result every clock.

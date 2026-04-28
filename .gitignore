@@ -1,0 +1,8 @@
+# Verilog simulator output files
+*.vvp
+
+# Waveform dump files
+*.vcd
+
+# ModelSim working library
+work/
