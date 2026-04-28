@@ -4,5 +4,11 @@
 # Waveform dump files
 *.vcd
 
+# Default Icarus output name
+a.out
+
+# Python bytecode cache
+__pycache__/
+
 # ModelSim working library
 work/

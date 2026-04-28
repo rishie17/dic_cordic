@@ -1,91 +1,107 @@
 `timescale 1ns/1ps
 
-// Testbench for pipelined CORDIC divider.
+// Testbench for the pipelined rotation + vectoring CORDIC.
 module tb_cordic_pipeline;
-    parameter N = 32;              // data width used by DUT
-    parameter FRAC = 28;           // fractional bit count used by DUT
+    parameter N = 32;                    // data width used by DUT
+    parameter FRAC = 28;                 // fractional bit count used by DUT
 
-    reg clk;                       // testbench clock
-    reg rst;                       // reset signal
-    reg valid_in;                  // marks input as valid
-    reg signed [N-1:0] num;        // numerator input
-    reg signed [N-1:0] den;        // denominator input
-    wire valid_out;                // output valid signal
-    wire signed [N-1:0] quo;       // quotient output
+    reg clk;                             // testbench clock
+    reg rst;                             // reset signal
+    reg valid_in;                        // input valid flag
+    reg signed [N-1:0] x_in;             // input x value
+    reg signed [N-1:0] y_in;             // input y value
+    reg signed [N-1:0] angle_in;         // input rotation angle
+    wire valid_out;                      // output valid flag
+    wire signed [N-1:0] x_rot_out;       // rotated x output
+    wire signed [N-1:0] y_rot_out;       // rotated y output
+    wire signed [N-1:0] magnitude_out;   // vectoring magnitude
+    wire signed [N-1:0] angle_out;       // vectoring angle
+    wire signed [N-1:0] quotient_out;    // linear CORDIC quotient
 
-    integer fp;                    // CSV file handle
-    integer cycle;                 // simple cycle counter
+    integer fp;                          // CSV file handle
+    integer cycle;                       // cycle counter
 
-    cordic_pipeline div1 (         // instantiate divider DUT
-        .clk(clk),                 // connect clock
-        .rst(rst),                 // connect reset
-        .valid_in(valid_in),       // connect input valid
-        .numerator_in(num),        // connect numerator
-        .denominator_in(den),      // connect denominator
-        .valid_out(valid_out),     // connect output valid
-        .quotient_out(quo)         // connect quotient
+    cordic_pipeline dut (                // instantiate new pipeline DUT
+        .clk(clk),
+        .rst(rst),
+        .valid_in(valid_in),
+        .x_in(x_in),
+        .y_in(y_in),
+        .angle_in(angle_in),
+        .valid_out(valid_out),
+        .x_rot_out(x_rot_out),
+        .y_rot_out(y_rot_out),
+        .magnitude_out(magnitude_out),
+        .angle_out(angle_out),
+        .quotient_out(quotient_out)
     );
 
-    always #5 clk = ~clk;          // make a 10 ns clock
+    always #5 clk = ~clk;                // make a 10 ns clock
 
-    // Convert real number to fixed-point integer.
-    function signed [N-1:0] fx;
-        input real a;              // real input value
+    function signed [N-1:0] fx;          // convert real to fixed point
+        input real a;
         begin
-            fx = $rtoi(a * (1 << FRAC)); // scale real value by 2^FRAC
+            fx = $rtoi(a * (1 << FRAC));
         end
     endfunction
 
-    // Send one division sample into the pipeline.
-    task give_input;
-        input real n;              // numerator as real
-        input real d;              // denominator as real
+    task give_input;                     // send one sample into pipeline
+        input real x_real;
+        input real y_real;
+        input real angle_real;
         begin
-            @(negedge clk);        // change inputs away from active edge
-            num = fx(n);           // drive fixed-point numerator
-            den = fx(d);           // drive fixed-point denominator
-            valid_in = 1'b1;       // mark this input as valid
-            $fdisplay(fp, "IN,%0d,%f,%f,0", cycle, n, d); // save input row
+            @(negedge clk);              // change inputs away from posedge
+            x_in = fx(x_real);
+            y_in = fx(y_real);
+            angle_in = fx(angle_real);
+            valid_in = 1'b1;
+            $fdisplay(fp, "IN,%0d,%f,%f,%f,0,0,0,0,0", cycle, x_real, y_real, angle_real);
         end
     endtask
 
     initial begin
-        clk = 0;                   // start clock low
-        rst = 1;                   // start in reset
-        valid_in = 0;              // no valid input during reset
-        num = 0;                   // clear numerator
-        den = 0;                   // clear denominator
-        cycle = 0;                 // clear cycle counter
+        clk = 0;
+        rst = 1;
+        valid_in = 0;
+        x_in = 0;
+        y_in = 0;
+        angle_in = 0;
+        cycle = 0;
 
-        fp = $fopen("results/pipeline_results.csv", "w"); // open CSV file
-        $fdisplay(fp, "type,cycle,numerator,denominator,quotient_int"); // header
+        fp = $fopen("results/pipeline_results.csv", "w");
+        $fdisplay(fp, "type,cycle,x_in,y_in,angle_in,x_rot,y_rot,mag_out,angle_out,quotient_out");
 
-        repeat (3) @(posedge clk); // hold reset for a few clocks
-        rst = 0;                   // release reset
+        repeat (3) @(posedge clk);
+        rst = 0;
 
-        give_input(0.50, 1.00);    // expected result about 0.5
-        give_input(0.75, 1.25);    // expected result about 0.6
-        give_input(1.00, 1.50);    // expected result about 0.6667
-        give_input(-0.60, 1.20);   // expected result about -0.5
-        give_input(1.40, 1.00);    // expected result about 1.4
-        give_input(0.20, 0.80);    // expected result about 0.25
+        give_input(1.0, 0.0, 0.000000);   // quotient near 0/1 = 0
+        give_input(1.0, 0.0, 0.244979);   // quotient near tan(14 deg) = 0.25
+        give_input(1.0, 0.0, -0.244979);  // quotient near -0.25
+        give_input(1.0, 0.0, 0.523599);   // quotient near tan(30 deg) = 0.577
+        give_input(1.0, 0.0, 0.785398);   // quotient near tan(45 deg) = 1.0
+        give_input(0.8, -0.2, 0.349066);  // general vector case
+        give_input(0.5, 0.3, 0.000000);   // quotient = 0.3/0.5 = 3/5
+        give_input(0.7, 0.6, 0.000000);   // quotient = 0.6/0.7 = 6/7
 
-        @(negedge clk);            // wait before turning off valid
-        valid_in = 0;              // stop sending new inputs
-        num = 0;                   // clear numerator
-        den = fx(1.0);             // keep denominator nonzero
+        @(negedge clk);
+        valid_in = 0;
+        x_in = 0;
+        y_in = 0;
+        angle_in = 0;
 
-        repeat (30) @(posedge clk);// wait for all outputs
-        $fclose(fp);               // close CSV file
-        $display("pipeline tests finished"); // print completion message
-        $finish;                   // stop simulation
+        repeat (65) @(posedge clk);
+        $fclose(fp);
+        $display("pipeline rotation+vectoring tests finished");
+        $finish;
     end
 
     always @(posedge clk) begin
-        cycle <= cycle + 1;        // count clock cycles
-        if (valid_out) begin       // save only valid outputs
-            $display("cycle=%0d quotient_int=%0d", cycle, quo); // print result
-            $fdisplay(fp, "OUT,%0d,0,0,%0d", cycle, quo);       // save output row
+        cycle <= cycle + 1;
+        if (valid_out) begin
+            $display("cycle=%0d x_rot=%0d y_rot=%0d mag=%0d angle=%0d quo=%0d",
+                     cycle, x_rot_out, y_rot_out, magnitude_out, angle_out, quotient_out);
+            $fdisplay(fp, "OUT,%0d,0,0,0,%0d,%0d,%0d,%0d,%0d",
+                      cycle, x_rot_out, y_rot_out, magnitude_out, angle_out, quotient_out);
         end
     end
 endmodule

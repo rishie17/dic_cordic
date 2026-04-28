@@ -6,7 +6,7 @@ This folder contains a complete small CORDIC project:
 - `rtl/cordic_vectoring.v` - Q1 vectoring mode CORDIC
 - `rtl/tb_cordic_q1.v` - testbench for both Q1 modules
 - `verify/verify_q1.py` - Python checker for Q1 CSV outputs
-- `rtl/cordic_pipeline.v` - Q2 pipelined linear CORDIC divider
+- `rtl/cordic_pipeline.v` - Q2 pipelined rotation plus vectoring CORDIC
 - `rtl/tb_cordic_pipeline.v` - testbench for Q2
 - `verify/verify_pipeline.py` - Python checker for Q2 CSV output
 - `rtl/modelsim_commands.do` - basic ModelSim command file
@@ -42,4 +42,4 @@ The important part is `(y >> i)` and `(x >> i)`. A right shift by `i` bits is th
 
 Vectoring mode is almost the same hardware, but the decision is based on `y_reg` instead of `z_reg`. Here the aim is to push `y_reg` close to zero. When that happens, `x_reg` is the magnitude, after correcting the CORDIC gain, and `z_reg` is the angle.
 
-The pipeline divider uses linear CORDIC. It has one register per iteration, so stage 0 starts the division and stage 16 gives the final quotient. The latency is about 16 clocks, but after the pipeline fills, a new answer can come out every clock. This is easier to trace in a viva because each array index is basically one pipeline stage.
+The pipeline version first rotates the input vector, then sends that rotated vector into a second vectoring pipeline. It has one register per iteration in each part, so the total latency is about 32 clocks, but after the pipe fills, a new result can still come out every clock.
